@@ -1,0 +1,198 @@
+#include <SoftwareSerial.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_ADXL345_U.h>
+#define Buzzer 13
+SoftwareSerial gsm_serial(10, 11);
+
+Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified();
+String phone_number1 = "9487675459";
+
+const int button1Pin = 14;//A0
+const int button2Pin = 15;//A1
+
+bool button1Pressed = false;
+bool button2Pressed = false;
+unsigned long button1PressTime = 0;
+
+bool sms_sent = false;
+int sms_count = 0;
+int call_count = 0;
+bool start_process = false;
+
+#include <TinyGPS++.h>
+SoftwareSerial gps_serial(5, 6);
+TinyGPSPlus gps;
+double Latitude, Longitude;
+String message;
+String map_link = "https://maps.google.com/maps?q=loc:";
+String default_lati = "11.942640"; //default latitude
+String default_longi = "79.494071";//default longitude
+String lati = "";
+String longi = "";
+int alert =0;
+
+SoftwareSerial esp_serial(3, 4);
+const int button3Pin = 8;
+const int button4Pin = 9;
+
+void setup()
+{
+  Serial.begin(9600);
+  if (!accel.begin())
+
+  {
+    Serial.println("No valid sensor found");
+    while (1);
+  }
+  
+  gsm_serial.begin(9600);
+  gps_serial.begin(9600);
+  esp_serial.begin(9600);
+  
+  pinMode(button1Pin, INPUT_PULLUP);
+  pinMode(button2Pin, INPUT_PULLUP);
+
+  pinMode(button3Pin, INPUT_PULLUP);
+  pinMode(button4Pin, INPUT_PULLUP);
+
+  pinMode(Buzzer, OUTPUT);
+  digitalWrite(Buzzer, HIGH);
+}
+
+void loop()
+{
+  readGPS();
+  sensors_event_t event;
+  accel.getEvent(&event);
+
+  int y = event.acceleration.y;
+  int z = event.acceleration.z;
+  
+  Serial.print("X: "); Serial.print(event.acceleration.x); Serial.println("  ");
+  Serial.print("Y: "); Serial.print(y); Serial.println("  ");
+  Serial.print("Z: "); Serial.print(z); Serial.println("  ");
+  
+  Serial.println("m/s^2 ");
+  delay(500);
+  if (Latitude == 0.00 && Longitude == 0.00) {
+    lati = default_lati;
+    longi = default_longi;
+  } else {
+    lati = String(Latitude, 6);
+    longi = String(Longitude, 6);
+  }
+
+  if (digitalRead(button1Pin) == LOW && !button1Pressed) {
+    Serial.println("Start button pressed");
+    button1Pressed = true;
+    button1PressTime = millis();
+  }
+
+  if (button1Pressed && millis() - button1PressTime >= 3000) {
+    Serial.println("Start button preseed 3 seconds");
+    start_process = true;
+  }
+
+  if (digitalRead(button2Pin) == LOW && !button2Pressed) {
+    Serial.println("Stop button pressed");
+    start_process = false;
+    button2Pressed = true;
+    call_count = 5;
+  }
+
+  if (digitalRead(button1Pin) == HIGH && button1Pressed) {
+    button1Pressed = false;
+  }
+
+  if (digitalRead(button2Pin) == HIGH && button2Pressed) {
+    button2Pressed = false;
+  }
+
+  if ((start_process == true) || (y > 1 || z <7))
+  {
+    alert=1;
+    Serial.println("Process running...");
+    digitalWrite(Buzzer, HIGH);
+    delay(1000);
+    digitalWrite(Buzzer, LOW);
+    message = "Emergency Help!!! Need at " + map_link + lati + "," + longi;
+    send_msg(message, phone_number1);
+      //send_msg(message, phone_number1);
+  }
+  else
+  {
+     alert=0;
+    digitalWrite(Buzzer, LOW);
+    delay(1000);
+  }
+
+  esp_serial.print(y);
+  esp_serial.print(",");
+  esp_serial.print(z);
+  esp_serial.print(",");
+  esp_serial.print(lati);
+  esp_serial.print(",");
+  esp_serial.print(longi);
+  esp_serial.print(",");
+  if(digitalRead(button3Pin)==LOW){
+    esp_serial.print("8");
+  }
+  else{
+    esp_serial.print("0");
+  }
+  esp_serial.print(",");
+  if(digitalRead(button4Pin)==LOW){
+    esp_serial.print("9");
+  }
+  else{
+    esp_serial.print("0");
+  }
+  esp_serial.print(",");
+  esp_serial.print(alert);
+  esp_serial.print(";");
+}
+void send_msg(String msg, String phone_number) {
+  if (sms_count == 2 && call_count < 5) {
+    Serial.print("Calling count :");
+    Serial.println(call_count + 1);
+    gsm_serial.println("AT+CMGF=1");
+    delay(2000);
+    gsm_serial.println("ATD" + String(phone_number) + ";\r");
+    delay(10000);
+    gsm_serial.println("ATH");
+    delay(3000);
+    call_count = call_count + 1;
+    Serial.print("Call ");
+    Serial.print(call_count);
+    Serial.println(" ended");
+  }
+  if (sms_sent == false && sms_count < 2) {
+    Serial.println("Sending SMS");
+    gsm_serial.println("AT+CMGF=1");
+    delay(2000);
+    gsm_serial.println("AT+CMGS=\"+91" + String(phone_number) + "\"\r");
+    delay(3000);
+    gsm_serial.println(msg);
+    delay(1000);
+    gsm_serial.println((char)26);
+    delay(500);
+    Serial.print("SMS Sent ");
+    sms_count = sms_count + 1;
+    Serial.println(sms_count);
+    if (sms_count == 2) {
+      sms_sent = true;
+      call_count = 0;
+      Serial.println("SMS's Completed");
+    }
+  }
+}
+void readGPS() {
+  while (gps_serial.available() > 0) {
+    gps.encode(gps_serial.read());
+    if (gps.location.isUpdated()) {
+      Latitude = gps.location.lat();
+      Longitude = gps.location.lng();
+    }
+  }
+}
